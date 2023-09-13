@@ -6,7 +6,7 @@ use nom::character::complete::{char, i64};
 use nom::combinator::map;
 use nom::IResult;
 use nom::multi::{length_data, many0};
-use nom::sequence::{delimited, terminated};
+use nom::sequence::{delimited, pair, terminated};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct BEncoding {
@@ -14,7 +14,7 @@ pub struct BEncoding {
 }
 
 impl BEncoding {
-    pub fn new(value: HashMap<String, BEncoding>) -> BEncoding {
+    pub fn new(value: Vec<DictionaryItem>) -> BEncoding {
         BEncoding {
             value: BEncodingType::Dictionary(value)
         }
@@ -22,12 +22,15 @@ impl BEncoding {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub struct DictionaryItem(String, BEncodingType);
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum BEncodingType {
     Integer(i64),
     // TODO: no guarantee that this is a valid UTF-8 string
     String(String),
     List(Vec<BEncodingType>),
-    Dictionary(HashMap<String, BEncoding>),
+    Dictionary(Vec<DictionaryItem>),
 }
 
 // Given a stream of bytes representing a bencoded string, return the decoded string
@@ -40,12 +43,27 @@ fn parse_type(inp: &str) -> IResult<&str, BEncodingType> {
         parse_integer,
         parse_string,
         parse_list,
-        // parse_dictionary
+        parse_dictionary
     ))(inp)
 }
 
 fn parse_dictionary(inp: &str) -> IResult<&str, BEncodingType> {
-    Ok((inp, BEncodingType::Dictionary(HashMap::new())))
+    map(
+        delimited(
+            char('d'),
+            many0(parse_dictionary_item),
+            char('e'),
+        ), BEncodingType::Dictionary,
+    )(inp)
+}
+
+fn parse_dictionary_item(inp: &str) -> IResult<&str, DictionaryItem> {
+    map(
+        pair(
+            parse_string_raw,
+            parse_type,
+        ), |(key, value)| DictionaryItem(key.to_string(), value)
+    )(inp)
 }
 
 fn parse_list(inp: &str) -> IResult<&str, BEncodingType> {
@@ -63,11 +81,13 @@ fn parse_items(inp: &str) -> IResult<&str, Vec<BEncodingType>> {
 }
 
 fn parse_string(inp: &str) -> IResult<&str, BEncodingType> {
-    map(
-        length_data(terminated(
-            map(i64, |x| x as usize), char(':'),
-        )), |x| BEncodingType::String(String::from(x)),
-    )(inp)
+    map(parse_string_raw, |x| BEncodingType::String(x.to_string()))(inp)
+}
+
+fn parse_string_raw(inp: &str) -> IResult<&str, &str> {
+    length_data(terminated(
+        map(i64, |x| x as usize), char(':'),
+    ))(inp)
 }
 
 fn parse_integer(inp: &str) -> IResult<&str, BEncodingType> {
@@ -142,6 +162,34 @@ mod test {
         assert_eq!(
             Err(Err::Error(error_position!("abc", ErrorKind::Char))),
             parse_list("labc")
+        );
+    }
+
+    #[test]
+    pub fn test_parse_dictionary() {
+        assert_eq!(Ok(("", BEncodingType::Dictionary(vec![]))), parse_dictionary("de"));
+        assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
+            DictionaryItem("a".to_string(),BEncodingType::Integer(123)),
+        ]))), parse_dictionary("d1:ai123ee"));
+        assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
+            DictionaryItem("a".to_string(), BEncodingType::List(vec![BEncodingType::String(String::from("hey"))])),
+            DictionaryItem("b".to_string(), BEncodingType::List(vec![])),
+        ]))), parse_dictionary("d1:al3:heye1:blee"));
+        assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
+            DictionaryItem(String::from("inner"), BEncodingType::Dictionary(vec![
+                DictionaryItem(String::from("a"), BEncodingType::Integer(345)),
+                DictionaryItem(String::from("b"), BEncodingType::String(String::from("wow"))),
+            ])),
+            DictionaryItem(String::from("inner2"), BEncodingType::Dictionary(vec![])),
+        ]))), parse_dictionary("d5:innerd1:ai345e1:b3:wowe6:inner2dee"));
+
+        assert_eq!(
+            Err(Err::Error(error_position!("abc", ErrorKind::Char))),
+            parse_dictionary("abc")
+        );
+        assert_eq!(
+            Err(Err::Error(error_position!("4:iteme", ErrorKind::Char))),
+            parse_dictionary("d4:iteme")
         );
     }
 }
