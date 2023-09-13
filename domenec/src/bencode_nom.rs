@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{char, i64};
@@ -8,16 +6,18 @@ use nom::IResult;
 use nom::multi::{length_data, many0};
 use nom::sequence::{delimited, pair, terminated};
 
+// This is a simple implementation of the bencode format using nom. It may not be as efficient as
+// using a hand-written parser, but it is easier to write and maintain.
+// TODO: use a hand-written parser for better performance and benchmark the difference
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct BEncoding {
     value: BEncodingType,
 }
 
 impl BEncoding {
-    pub fn new(value: Vec<DictionaryItem>) -> BEncoding {
-        BEncoding {
-            value: BEncodingType::Dictionary(value)
-        }
+    pub fn new(value: BEncodingType) -> BEncoding {
+        BEncoding { value }
     }
 }
 
@@ -31,11 +31,14 @@ pub enum BEncodingType {
     String(String),
     List(Vec<BEncodingType>),
     Dictionary(Vec<DictionaryItem>),
+
+    // TODO: implement encoding
 }
 
 // Given a stream of bytes representing a bencoded string, return the decoded string
-pub fn decode(inp: &str) -> IResult<&str, BEncodingType> {
-    map(parse_dictionary, |x| x)(inp)
+// FIXME: Use &[u8] instead of &str
+pub fn decode(inp: &str) -> IResult<&str, BEncoding> {
+    map(parse_dictionary, |x| BEncoding::new(x))(inp)
 }
 
 fn parse_type(inp: &str) -> IResult<&str, BEncodingType> {
@@ -62,7 +65,7 @@ fn parse_dictionary_item(inp: &str) -> IResult<&str, DictionaryItem> {
         pair(
             parse_string_raw,
             parse_type,
-        ), |(key, value)| DictionaryItem(key.to_string(), value)
+        ), |(key, value)| DictionaryItem(key.to_string(), value),
     )(inp)
 }
 
@@ -98,6 +101,7 @@ fn parse_integer(inp: &str) -> IResult<&str, BEncodingType> {
     )(inp)
 }
 
+// TODO: add tests using real torrent file contents
 #[cfg(test)]
 mod test {
     use std::num::NonZeroUsize;
@@ -169,7 +173,7 @@ mod test {
     pub fn test_parse_dictionary() {
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![]))), parse_dictionary("de"));
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
-            DictionaryItem("a".to_string(),BEncodingType::Integer(123)),
+            DictionaryItem("a".to_string(), BEncodingType::Integer(123)),
         ]))), parse_dictionary("d1:ai123ee"));
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
             DictionaryItem("a".to_string(), BEncodingType::List(vec![BEncodingType::String(String::from("hey"))])),
