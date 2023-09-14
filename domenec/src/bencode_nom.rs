@@ -5,35 +5,13 @@ use nom::combinator::map;
 use nom::IResult;
 use nom::multi::{length_data, many0};
 use nom::sequence::{delimited, pair, terminated};
+use crate::bencode::{BEncoding, BEncodingType, DictionaryItem};
 
 // This is a simple implementation of the bencode format using nom. It may not be as efficient as
 // using a hand-written parser, but it is easier to write and maintain.
 // TODO: use a hand-written parser for better performance and benchmark the difference
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct BEncoding {
-    value: BEncodingType,
-}
 
-impl BEncoding {
-    pub fn new(value: BEncodingType) -> BEncoding {
-        BEncoding { value }
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct DictionaryItem(String, BEncodingType);
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum BEncodingType {
-    Integer(i64),
-    // TODO: no guarantee that this is a valid UTF-8 string
-    String(String),
-    List(Vec<BEncodingType>),
-    Dictionary(Vec<DictionaryItem>),
-
-    // TODO: implement encoding
-}
 
 // Given a stream of bytes representing a bencoded string, return the decoded string
 // FIXME: Use &[u8] instead of &str
@@ -65,7 +43,7 @@ fn parse_dictionary_item(inp: &str) -> IResult<&str, DictionaryItem> {
         pair(
             parse_string_raw,
             parse_type,
-        ), |(key, value)| DictionaryItem(key.to_string(), value),
+        ), |(key, value)| DictionaryItem::new(key.to_string(), value),
     )(inp)
 }
 
@@ -173,18 +151,18 @@ mod test {
     pub fn test_parse_dictionary() {
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![]))), parse_dictionary("de"));
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
-            DictionaryItem("a".to_string(), BEncodingType::Integer(123)),
+            DictionaryItem::new("a".to_string(), BEncodingType::Integer(123)),
         ]))), parse_dictionary("d1:ai123ee"));
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
-            DictionaryItem("a".to_string(), BEncodingType::List(vec![BEncodingType::String(String::from("hey"))])),
-            DictionaryItem("b".to_string(), BEncodingType::List(vec![])),
+            DictionaryItem::new("a".to_string(), BEncodingType::List(vec![BEncodingType::String(String::from("hey"))])),
+            DictionaryItem::new("b".to_string(), BEncodingType::List(vec![])),
         ]))), parse_dictionary("d1:al3:heye1:blee"));
         assert_eq!(Ok(("", BEncodingType::Dictionary(vec![
-            DictionaryItem(String::from("inner"), BEncodingType::Dictionary(vec![
-                DictionaryItem(String::from("a"), BEncodingType::Integer(345)),
-                DictionaryItem(String::from("b"), BEncodingType::String(String::from("wow"))),
+            DictionaryItem::new(String::from("inner"), BEncodingType::Dictionary(vec![
+                DictionaryItem::new(String::from("a"), BEncodingType::Integer(345)),
+                DictionaryItem::new(String::from("b"), BEncodingType::String(String::from("wow"))),
             ])),
-            DictionaryItem(String::from("inner2"), BEncodingType::Dictionary(vec![])),
+            DictionaryItem::new(String::from("inner2"), BEncodingType::Dictionary(vec![])),
         ]))), parse_dictionary("d5:innerd1:ai345e1:b3:wowe6:inner2dee"));
 
         assert_eq!(
