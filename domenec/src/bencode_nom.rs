@@ -16,7 +16,7 @@ use crate::bencode::{BEncoding, BEncodingType, DictionaryItem};
 // Given a stream of bytes representing a bencoded string, return the decoded string
 // FIXME: Use &[u8] instead of &str
 pub fn decode(inp: &str) -> IResult<&str, BEncoding> {
-    map(parse_dictionary, |x| BEncoding::new(x))(inp)
+    map(parse_dictionary, BEncoding::new)(inp)
 }
 
 fn parse_type(inp: &str) -> IResult<&str, BEncodingType> {
@@ -48,7 +48,7 @@ fn parse_dictionary_item(inp: &str) -> IResult<&str, DictionaryItem> {
 }
 
 fn parse_list(inp: &str) -> IResult<&str, BEncodingType> {
-    map(parse_items, |x| BEncodingType::List(x))(inp)
+    map(parse_items, BEncodingType::List)(inp)
 }
 
 fn parse_items(inp: &str) -> IResult<&str, Vec<BEncodingType>> {

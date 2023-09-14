@@ -86,7 +86,7 @@ impl BEncodingParser<'_> {
     fn parse_list(&mut self) -> Result<Vec<BEncodingType>> {
         self.expect_char(b'l')?;
         let mut list = Vec::new();
-        while let Some(_) = self.peek().filter(|&c| c != b'e'){
+        while self.peek().filter(|&c| c != b'e').is_some() {
             list.push(self.parse_type()?);
         }
         self.expect_char(b'e')?;
@@ -96,10 +96,10 @@ impl BEncodingParser<'_> {
     fn parse_dict(&mut self) -> Result<LinkedHashMap<String, BEncodingType>> {
         self.expect_char(b'd')?;
         let mut dict = LinkedHashMap::new();
-        while let Some(_) = self.peek().filter(|&c| c != b'e'){
+        while self.peek().filter(|&c| c != b'e').is_some() {
             let key = self.parse_str()?;
             let value = self.parse_type()
-                .or(Err(BencodeError::KeyWithoutValue(key.clone())))?;
+                .map_err(|_| BencodeError::KeyWithoutValue(key.clone()))?;
             dict.insert(key, value);
         }
         self.expect_char(b'e')?;
