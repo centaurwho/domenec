@@ -9,12 +9,35 @@ type Result<T> = std::result::Result<T, BencodeError>;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BencodeError {
     Err,
-    Eof,
+    MissingIdentifier(char),
+    KeyWithoutValue(String),
+    StringWithoutLength,
+    NotANumber,
+    EndOfFile,
 }
 
 impl fmt::Display for BencodeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "An error occurred while parsing bencoded data")
+        match self {
+            BencodeError::MissingIdentifier(chr) => {
+                write!(f, "Expected identifier '{}'", chr)
+            }
+            BencodeError::KeyWithoutValue(key) => {
+                write!(f, "Dictionary key '{}' without value", key)
+            }
+            BencodeError::EndOfFile => {
+                write!(f, "Unexpected end of file")
+            }
+            BencodeError::StringWithoutLength => {
+                write!(f, "Expected string length")
+            }
+            BencodeError::NotANumber => {
+                write!(f, "Expected a number but ")
+            }
+            _ => {
+                write!(f, "Unknown error during parsing")
+            }
+        }
     }
 }
 
@@ -41,13 +64,13 @@ impl BEncodingParser<'_> {
     }
 
     fn parse_str(&mut self) -> Result<String> {
-        let len = self.read_num()?;
+        let len = self.read_num().or(Err(BencodeError::StringWithoutLength))?;
         self.expect_char(b':')?;
         // TODO: implement
         let start = self.cursor;
         let end = start + len as usize;
         if end > self.bytes.len() {
-            return Err(BencodeError::Eof);
+            return Err(BencodeError::EndOfFile);
         }
         self.cursor = end;
         Ok(String::from_utf8_lossy(&self.bytes[start..end]).to_string())
@@ -63,7 +86,7 @@ impl BEncodingParser<'_> {
     fn parse_list(&mut self) -> Result<Vec<BEncodingType>> {
         self.expect_char(b'l')?;
         let mut list = Vec::new();
-        while self.peek() != Some(b'e') {
+        while let Some(_) = self.peek().filter(|&c| c != b'e'){
             list.push(self.parse_type()?);
         }
         self.expect_char(b'e')?;
@@ -73,9 +96,10 @@ impl BEncodingParser<'_> {
     fn parse_dict(&mut self) -> Result<LinkedHashMap<String, BEncodingType>> {
         self.expect_char(b'd')?;
         let mut dict = LinkedHashMap::new();
-        while self.peek() != Some(b'e') {
+        while let Some(_) = self.peek().filter(|&c| c != b'e'){
             let key = self.parse_str()?;
-            let value = self.parse_type()?;
+            let value = self.parse_type()
+                .or(Err(BencodeError::KeyWithoutValue(key.clone())))?;
             dict.insert(key, value);
         }
         self.expect_char(b'e')?;
@@ -106,7 +130,7 @@ impl BEncodingParser<'_> {
         // FIXME: We are peeking twice here, try to avoid it
         if let Some(chr) = self.peek() {
             if !chr.is_ascii_digit() {
-                return Err(BencodeError::Err);
+                return Err(BencodeError::NotANumber);
             }
         }
         let mut acc = 0;
@@ -124,7 +148,7 @@ impl BEncodingParser<'_> {
     fn expect_char(&mut self, expected: u8) -> Result<u8> {
         match self.peek() {
             Some(chr) if chr == expected => self.advance(),
-            _ => Err(BencodeError::Err),
+            _ => Err(BencodeError::MissingIdentifier(expected as char)),
         }
     }
 
@@ -135,7 +159,7 @@ impl BEncodingParser<'_> {
     fn advance(&mut self) -> Result<u8> {
         let v = self.bytes.get(self.cursor).cloned();
         self.cursor += 1;
-        v.ok_or(BencodeError::Eof)
+        v.ok_or(BencodeError::EndOfFile)
     }
 
     // FIXME: I am not happy with this
@@ -160,7 +184,7 @@ mod test {
     pub fn expect_char() {
         let mut parser = BEncodingParser::new(b"abc");
         assert_eq!(parser.expect_char(b'a'), Ok(b'a'));
-        assert_eq!(parser.expect_char(b'a'), Err(BencodeError::Err));
+        assert_eq!(parser.expect_char(b'a'), Err(BencodeError::MissingIdentifier('a')));
     }
 
     #[test]
@@ -169,10 +193,10 @@ mod test {
 
         assert_eq!(Ok(123), parse_int("i123e"));
         assert_eq!(Ok(-123), parse_int("i-123e"));
-        assert_eq!(Err(BencodeError::Err), parse_int("abc"));
-        assert_eq!(Err(BencodeError::Err), parse_int("iabc"));
-        assert_eq!(Err(BencodeError::Err), parse_int("i-abc"));
-        assert_eq!(Err(BencodeError::Err), parse_int("i23f"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('i')), parse_int("abc"));
+        assert_eq!(Err(BencodeError::NotANumber), parse_int("iabc"));
+        assert_eq!(Err(BencodeError::NotANumber), parse_int("i-abc"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('e')), parse_int("i23f"));
     }
 
     #[test]
@@ -182,10 +206,9 @@ mod test {
         assert_eq!(Ok("abc".to_string()), parse_string("3:abc"));
 
         assert_eq!(Ok("".to_string()), parse_string("0:"));
-        assert_eq!(Err(BencodeError::Err), parse_string("abc"));
-        assert_eq!(Err(BencodeError::Err), parse_string("3abc"));
-        assert_eq!(Err(BencodeError::Err), parse_string("abc"));
-        assert_eq!(Err(BencodeError::Eof), parse_string("3:ab"));
+        assert_eq!(Err(BencodeError::StringWithoutLength), parse_string("abc"));
+        assert_eq!(Err(BencodeError::MissingIdentifier(':')), parse_string("3abc"));
+        assert_eq!(Err(BencodeError::EndOfFile), parse_string("3:ab"));
     }
 
     #[test]
@@ -195,13 +218,15 @@ mod test {
         assert_eq!(Ok(vec![]), parse_list("le"));
         assert_eq!(Ok(vec![BEncodingType::Integer(123)]), parse_list("li123ee"));
         assert_eq!(Ok(vec![BEncodingType::String("abc".to_string())]), parse_list("l3:abce"));
+        assert_eq!(Ok(vec![BEncodingType::String("abc".to_string()), BEncodingType::String("defg".to_string())]), parse_list("l3:abc4:defge"));
         assert_eq!(Ok(vec![BEncodingType::List(vec![])]), parse_list("llee"));
         assert_eq!(Ok(vec![
             BEncodingType::List(vec![BEncodingType::List(vec![])]),
             BEncodingType::List(vec![BEncodingType::List(vec![])]),
         ]), parse_list("llleelleee"));
-        assert_eq!(Err(BencodeError::Err), parse_list("abc"));
-        assert_eq!(Err(BencodeError::Err), parse_list("labc"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('l')), parse_list("abc"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('e')), parse_list("l3:abc"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('l')), parse_list("abc"));
     }
 
     #[test]
@@ -228,7 +253,7 @@ mod test {
 
         assert_eq!(Ok(dct), parse_dictionary("d5:innerd1:ai345e1:b3:wowe6:inner2dee"));
 
-        assert_eq!(Err(BencodeError::Err), parse_dictionary("abc"));
-        assert_eq!(Err(BencodeError::Err), parse_dictionary("d4:iteme"));
+        assert_eq!(Err(BencodeError::MissingIdentifier('d')), parse_dictionary("abc"));
+        assert_eq!(Err(BencodeError::KeyWithoutValue("item".to_string())), parse_dictionary("d4:iteme"));
     }
 }
