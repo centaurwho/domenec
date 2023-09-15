@@ -29,7 +29,6 @@ impl BDecoder<'_> {
     fn parse_str(&mut self) -> Result<String> {
         let len = self.read_num().or(Err(DecodingError::StringWithoutLength))?;
         self.expect_char(b':')?;
-        // TODO: implement
         let start = self.cursor;
         let end = start + len as usize;
         if end > self.bytes.len() {
