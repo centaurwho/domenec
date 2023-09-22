@@ -1,5 +1,6 @@
 use linked_hash_map::LinkedHashMap;
 
+use crate::bytestring::{ByteString, ToByteString};
 use crate::error::DecodingError;
 
 type Result<T> = std::result::Result<T, DecodingError>;
@@ -7,9 +8,10 @@ type Result<T> = std::result::Result<T, DecodingError>;
 #[derive(Debug, Eq, PartialEq)]
 pub enum BEncodingType {
     Integer(i64),
-    String(String),
+    // TODO: Use the original slice inside the input instead of copying it
+    String(ByteString),
     List(Vec<BEncodingType>),
-    Dictionary(LinkedHashMap<String, BEncodingType>),
+    Dictionary(LinkedHashMap<ByteString, BEncodingType>),
 }
 
 pub struct BDecoder<'a> {
@@ -26,8 +28,11 @@ impl BDecoder<'_> {
         self.parse_type()
     }
 
-    fn parse_str(&mut self) -> Result<String> {
+    fn parse_str(&mut self) -> Result<ByteString> {
         let len = self.read_num().or(Err(DecodingError::StringWithoutLength))?;
+        if len < 0 {
+            return Err(DecodingError::NegativeStringLen);
+        }
         self.expect_char(b':')?;
         let start = self.cursor;
         let end = start + len as usize;
@@ -36,7 +41,7 @@ impl BDecoder<'_> {
             return Err(DecodingError::EndOfFile);
         }
         self.cursor = end;
-        Ok(String::from_utf8_lossy(&self.bytes[start..end]).to_string())
+        Ok((&self.bytes[start..end]).to_byte_string())
     }
 
     fn parse_int(&mut self) -> Result<i64> {
@@ -56,7 +61,7 @@ impl BDecoder<'_> {
         Ok(list)
     }
 
-    fn parse_dict(&mut self) -> Result<LinkedHashMap<String, BEncodingType>> {
+    fn parse_dict(&mut self) -> Result<LinkedHashMap<ByteString, BEncodingType>> {
         self.expect_char(b'd')?;
         let mut dict = LinkedHashMap::new();
         while self.peek().filter(|&c| c != b'e').is_some() {
@@ -71,7 +76,7 @@ impl BDecoder<'_> {
 
     fn parse_type(&mut self) -> Result<BEncodingType> {
         match self.peek() {
-            None => Err(DecodingError::Err),
+            None => Err(DecodingError::EndOfFile),
             Some(b'i') => self.parse_int().map(BEncodingType::Integer),
             Some(b'l') => self.parse_list().map(BEncodingType::List),
             Some(b'd') => self.parse_dict().map(BEncodingType::Dictionary),
@@ -85,13 +90,15 @@ impl BDecoder<'_> {
             neg_const = -1;
             self.cursor += 1;
         }
-        // FIXME: Consider a cleaner early return here, not happy with the catchall
-        match self.peek() {
-            None => Err(DecodingError::EndOfFile),
-            Some(chr) if !chr.is_ascii_digit() => Err(DecodingError::NotANumber),
-            Some(chr) if neg_const == -1 && chr == b'0' => Err(DecodingError::NegativeZero),
-            _ => Ok(())
-        }?;
+        if let Some(chr) = self.peek() {
+            if !chr.is_ascii_digit() {
+                return Err(DecodingError::NotANumber)
+            } else if neg_const == -1 && chr == b'0' {
+                return Err(DecodingError::NegativeZero)
+            }
+        } else {
+            return Err(DecodingError::EndOfFile);
+        }
         let mut acc = 0;
         while let Some(v) = self.peek() {
             if v.is_ascii_digit() {
@@ -112,12 +119,13 @@ impl BDecoder<'_> {
         }
     }
 
+    // FIXME: Try returning Result to remove some unnecessary EndOfFile checks
     fn peek(&mut self) -> Option<u8> {
         self.bytes.get(self.cursor).cloned()
     }
 
     fn advance(&mut self) -> Result<u8> {
-        let v = self.bytes.get(self.cursor).cloned();
+        let v = self.peek();
         self.cursor += 1;
         v.ok_or(DecodingError::EndOfFile)
     }
@@ -168,9 +176,10 @@ mod test {
             (decoder.parse_str(), decoder.cursor)
         };
 
-        assert_eq!((Ok("abc".to_string()), 5), parse_string("3:abc"));
-        assert_eq!((Ok("".to_string()), 2), parse_string("0:"));
+        assert_eq!((Ok("abc".to_byte_string()), 5), parse_string("3:abc"));
+        assert_eq!((Ok("".to_byte_string()), 2), parse_string("0:"));
         assert_eq!((Err(DecodingError::StringWithoutLength), 0), parse_string("abc"));
+        assert_eq!((Err(DecodingError::NegativeStringLen), 2), parse_string("-3:abc"));
         assert_eq!((Err(DecodingError::MissingIdentifier(':')), 1), parse_string("3abc"));
         assert_eq!((Err(DecodingError::EndOfFile), 4), parse_string("3:ab"));
     }
@@ -184,8 +193,11 @@ mod test {
 
         assert_eq!((Ok(vec![]), 2), parse_list("le"));
         assert_eq!((Ok(vec![BEncodingType::Integer(123)]), 7), parse_list("li123ee"));
-        assert_eq!((Ok(vec![BEncodingType::String("abc".to_string())]), 7), parse_list("l3:abce"));
-        assert_eq!((Ok(vec![BEncodingType::String("abc".to_string()), BEncodingType::String("defg".to_string())]), 13), parse_list("l3:abc4:defge"));
+        assert_eq!((Ok(vec![BEncodingType::String("abc".to_byte_string())]), 7), parse_list("l3:abce"));
+        assert_eq!((Ok(vec![
+            BEncodingType::String("abc".to_byte_string()),
+            BEncodingType::String("defg".to_byte_string())]
+        ), 13), parse_list("l3:abc4:defge"));
         assert_eq!((Ok(vec![BEncodingType::List(vec![])]), 4), parse_list("llee"));
         assert_eq!((Ok(vec![
             BEncodingType::List(vec![BEncodingType::List(vec![])]),
@@ -205,24 +217,24 @@ mod test {
         assert_eq!((Ok(LinkedHashMap::new()), 2), parse_dictionary("de"));
 
         let mut dct = LinkedHashMap::new();
-        dct.insert("a".to_string(), BEncodingType::Integer(123));
+        dct.insert("a".to_byte_string(), BEncodingType::Integer(123));
         assert_eq!((Ok(dct), 10), parse_dictionary("d1:ai123ee"));
 
         let mut dct = LinkedHashMap::new();
-        dct.insert("a".to_string(), BEncodingType::List(vec![BEncodingType::String(String::from("hey"))]));
-        dct.insert("b".to_string(), BEncodingType::List(vec![]));
+        dct.insert("a".to_byte_string(), BEncodingType::List(vec![BEncodingType::String("hey".to_byte_string())]));
+        dct.insert("b".to_byte_string(), BEncodingType::List(vec![]));
         assert_eq!((Ok(dct), 17), parse_dictionary("d1:al3:heye1:blee"));
 
         let mut dct = LinkedHashMap::new();
         let mut inner_dct = LinkedHashMap::new();
-        inner_dct.insert("a".to_string(), BEncodingType::Integer(345));
-        inner_dct.insert("b".to_string(), BEncodingType::String(String::from("wow")));
-        dct.insert("inner".to_string(), BEncodingType::Dictionary(inner_dct));
-        dct.insert("inner2".to_string(), BEncodingType::Dictionary(LinkedHashMap::new()));
+        inner_dct.insert("a".to_byte_string(), BEncodingType::Integer(345));
+        inner_dct.insert("b".to_byte_string(), BEncodingType::String("wow".to_byte_string()));
+        dct.insert("inner".to_byte_string(), BEncodingType::Dictionary(inner_dct));
+        dct.insert("inner2".to_byte_string(), BEncodingType::Dictionary(LinkedHashMap::new()));
         assert_eq!((Ok(dct), 37), parse_dictionary("d5:innerd1:ai345e1:b3:wowe6:inner2dee"));
 
         assert_eq!((Err(DecodingError::MissingIdentifier('d')), 0), parse_dictionary("abc"));
-        assert_eq!((Err(DecodingError::KeyWithoutValue("item".to_string())), 7), parse_dictionary("d4:iteme"));
+        assert_eq!((Err(DecodingError::KeyWithoutValue("item".to_byte_string())), 7), parse_dictionary("d4:iteme"));
         assert_eq!((Err(DecodingError::EndOfFile), 8), parse_dictionary("d1:a2:bc"));
     }
 }

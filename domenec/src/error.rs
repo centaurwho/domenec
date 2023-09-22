@@ -1,14 +1,15 @@
 use std::fmt;
+use crate::bytestring::ByteString;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DecodingError {
-    Err,
     MissingIdentifier(char),
-    KeyWithoutValue(String),
+    KeyWithoutValue(ByteString),
     StringWithoutLength,
     NotANumber,
     EndOfFile,
     NegativeZero,
+    NegativeStringLen,
 }
 
 impl fmt::Display for DecodingError {
@@ -20,7 +21,7 @@ impl fmt::Display for DecodingError {
             DecodingError::StringWithoutLength => write!(f, "Expected string length"),
             DecodingError::NotANumber => write!(f, "Expected a number but "),
             DecodingError::NegativeZero => write!(f, "Negative zero is not allowed. Use 0 instead"),
-            _ => write!(f, "Unknown error during parsing")
+            DecodingError::NegativeStringLen => write!(f, "Negative string length is not allowed"),
         }
     }
 }
