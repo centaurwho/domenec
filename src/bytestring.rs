@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 // Custom ByteString wrapper to avoid String allocations.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct ByteString(Vec<u8>);
+pub struct ByteString(pub Vec<u8>);
 
 pub trait ToByteString {
     fn to_byte_string(&self) -> ByteString;

@@ -5,7 +5,7 @@ use crate::error::DecodingError;
 
 type Result<T> = std::result::Result<T, DecodingError>;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub enum BEncodingType {
     Integer(i64),
     // TODO: Use the original slice inside the input instead of copying it
