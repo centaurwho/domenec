@@ -54,7 +54,7 @@ impl BDecoder<'_> {
     fn parse_list(&mut self) -> Result<Vec<BEncodingType>> {
         self.expect_char(b'l')?;
         let mut list = Vec::new();
-        while self.peek().filter(|&c| c != b'e').is_some() {
+        while self.peek()? != b'e' {
             list.push(self.parse_type()?);
         }
         self.expect_char(b'e')?;
@@ -64,7 +64,7 @@ impl BDecoder<'_> {
     fn parse_dict(&mut self) -> Result<LinkedHashMap<ByteString, BEncodingType>> {
         self.expect_char(b'd')?;
         let mut dict = LinkedHashMap::new();
-        while self.peek().filter(|&c| c != b'e').is_some() {
+        while self.peek()? != b'e' {
             let key = self.parse_str()?;
             let value = self.parse_type()
                 .map_err(|_| DecodingError::KeyWithoutValue(key.clone()))?;
@@ -75,32 +75,28 @@ impl BDecoder<'_> {
     }
 
     fn parse_type(&mut self) -> Result<BEncodingType> {
-        match self.peek() {
-            None => Err(DecodingError::EndOfFile),
-            Some(b'i') => self.parse_int().map(BEncodingType::Integer),
-            Some(b'l') => self.parse_list().map(BEncodingType::List),
-            Some(b'd') => self.parse_dict().map(BEncodingType::Dictionary),
-            Some(_) => self.parse_str().map(BEncodingType::String)
+        match self.peek()? {
+            b'i' => self.parse_int().map(BEncodingType::Integer),
+            b'l' => self.parse_list().map(BEncodingType::List),
+            b'd' => self.parse_dict().map(BEncodingType::Dictionary),
+            _ => self.parse_str().map(BEncodingType::String)
         }
     }
 
     fn read_num(&mut self) -> Result<i64> {
         let mut neg_const = 1;
-        if self.peek() == Some(b'-') {
+        if self.peek()? == b'-' {
             neg_const = -1;
             self.cursor += 1;
         }
-        if let Some(chr) = self.peek() {
-            if !chr.is_ascii_digit() {
-                return Err(DecodingError::NotANumber)
-            } else if neg_const == -1 && chr == b'0' {
-                return Err(DecodingError::NegativeZero)
-            }
-        } else {
-            return Err(DecodingError::EndOfFile);
+        let chr = self.peek()?;
+        if !chr.is_ascii_digit() {
+            return Err(DecodingError::NotANumber);
+        } else if neg_const == -1 && chr == b'0' {
+            return Err(DecodingError::NegativeZero);
         }
         let mut acc = 0;
-        while let Some(v) = self.peek() {
+        while let Ok(v) = self.peek() {
             if v.is_ascii_digit() {
                 acc = acc * 10 + (v - b'0') as i64;
                 self.cursor += 1;
@@ -112,22 +108,22 @@ impl BDecoder<'_> {
     }
 
     fn expect_char(&mut self, expected: u8) -> Result<u8> {
-        match self.peek() {
-            None => Err(DecodingError::EndOfFile),
-            Some(chr) if chr == expected => self.advance(),
-            _ => Err(DecodingError::MissingIdentifier(expected as char)),
+        if expected == self.peek()? {
+            self.advance()
+        } else {
+            Err(DecodingError::MissingIdentifier(expected as char))
         }
     }
 
-    // FIXME: Try returning Result to remove some unnecessary EndOfFile checks
-    fn peek(&mut self) -> Option<u8> {
+    fn peek(&mut self) -> Result<u8> {
         self.bytes.get(self.cursor).cloned()
+            .ok_or(DecodingError::EndOfFile)
     }
 
     fn advance(&mut self) -> Result<u8> {
-        let v = self.peek();
+        let v = self.peek()?;
         self.cursor += 1;
-        v.ok_or(DecodingError::EndOfFile)
+        Ok(v)
     }
 }
 
